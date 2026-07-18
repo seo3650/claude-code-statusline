@@ -1,0 +1,3 @@
+# Runtime cache written by the status line (per-machine, not source)
+.statusline_ratelimits.json
+.statusline_debug.log
