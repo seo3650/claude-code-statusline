@@ -41,7 +41,10 @@ make_bar() {
       ;;
   esac
   color=$(color_for_pct "$pct")
-  filled=$((pct * BAR_WIDTH / 100))
+  # Round to nearest cell (+50 before integer-dividing by 100) so e.g. 60%
+  # fills 5/8 cells (~62.5%) rather than flooring to 4/8 (50%), which read
+  # as visibly less than the number next to it.
+  filled=$(((pct * BAR_WIDTH + 50) / 100))
   [ "$filled" -gt "$BAR_WIDTH" ] && filled=$BAR_WIDTH
   empty=$((BAR_WIDTH - filled))
   fill_str="" empty_str=""
@@ -160,8 +163,12 @@ fmt_remaining() {
     printf '%dd%dh' "$d" "$h"
   elif [ "$h" -gt 0 ]; then
     printf '%dh%02dm' "$h" "$m"
-  else
+  elif [ "$m" -gt 0 ]; then
     printf '%dm' "$m"
+  else
+    # Under a minute left (or already past reset) — "0m" reads as "already
+    # done", so show "<1m" to mean the window is about to roll over.
+    printf '<1m'
   fi
 }
 h5_remaining=$(fmt_remaining "$h5_cache_resets")
