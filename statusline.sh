@@ -114,11 +114,15 @@ sync_window() {
   if [ -z "$cached_pct" ]; then
     # No cache entry yet — anything is an improvement.
     should_write=1
-  elif [ -n "$resets" ] && [ -n "$cached_resets" ] && [ "$resets" != "$cached_resets" ]; then
-    # resets_at moved — the window actually rolled over, so a lower % here
-    # is the legitimate post-reset value, not a stale session regressing us.
+  elif [ -n "$resets" ] && [ -n "$cached_resets" ] && [ "$resets" -gt "$cached_resets" ]; then
+    # resets_at advanced into the FUTURE — the window genuinely rolled over,
+    # so a lower % here is the real post-reset value. Crucially we require
+    # strictly-greater, not just different: a session that hasn't been
+    # restarted still carries yesterday's (high %, older resets_at) in its
+    # stdin, and "different" would let that stale reading masquerade as a
+    # fresh rollover and clobber today's correct, lower number.
     should_write=1
-  elif awk -v a="$pct" -v b="$cached_pct" 'BEGIN{exit !(a > b)}' 2>/dev/null; then
+  elif [ "$resets" = "$cached_resets" ] && awk -v a="$pct" -v b="$cached_pct" 'BEGIN{exit !(a > b)}' 2>/dev/null; then
     # Same window: usage only climbs until reset, so only accept readings
     # that move forward. Without this, a session that hasn't talked in a
     # while can wake up on its refreshInterval tick and overwrite a fresher,
@@ -138,14 +142,31 @@ sync_window "seven_day" "$(echo "$input" | jq -r '.rate_limits.seven_day.used_pe
   "$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')"
 
 fmt_pct() {
-  local v="$1"
+  local v="$1" r
   [ -z "$v" ] && { echo "?"; return; }
-  printf '%.0f' "$v" 2>/dev/null || echo "$v"
+  r=$(printf '%.0f' "$v" 2>/dev/null) || { echo "$v"; return; }
+  # The API sometimes reports slightly over 100 (soft overage / rounding).
+  # The bar already caps at full, so cap the number too — "102%" next to a
+  # full bar just looks broken.
+  [ "$r" -gt 100 ] && r=100
+  echo "$r"
 }
 h5_cache_pct=$(jq -r '.five_hour.used_percentage // empty' "$CACHE_FILE" 2>/dev/null)
 h5_cache_resets=$(jq -r '.five_hour.resets_at // empty' "$CACHE_FILE" 2>/dev/null)
 d7_cache_pct=$(jq -r '.seven_day.used_percentage // empty' "$CACHE_FILE" 2>/dev/null)
 d7_cache_resets=$(jq -r '.seven_day.resets_at // empty' "$CACHE_FILE" 2>/dev/null)
+
+# If the cached window's reset time has already passed, the % belongs to an
+# expired window and nobody has posted the post-reset value yet — showing the
+# old number (possibly >100%) would be a lie. Blank it so it renders as "?"
+# with no countdown, until any session's next API response repopulates it.
+now_epoch=$(date +%s)
+if [ -n "$h5_cache_resets" ] && [ "$h5_cache_resets" -lt "$now_epoch" ]; then
+  h5_cache_pct="" h5_cache_resets=""
+fi
+if [ -n "$d7_cache_resets" ] && [ "$d7_cache_resets" -lt "$now_epoch" ]; then
+  d7_cache_pct="" d7_cache_resets=""
+fi
 usage_session=$(fmt_pct "$h5_cache_pct")
 usage_week=$(fmt_pct "$d7_cache_pct")
 
