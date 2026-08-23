@@ -23,7 +23,7 @@ No API calls, no keychain reads — just one local JSON file that all sessions s
 
 ## Features
 
-- **ctx** — context window used %, 8-cell bar
+- **ctx** — context window used %, 8-cell bar. Shows `?` with a dim empty bar until the session's first API response, since Claude Code has no context reading to report before then
 - **5h / 7d** — account rate-limit windows (Claude Pro/Max only), each with a `(in Xm)` reset countdown
 - **cost** — session cost in USD
 - **model** — display name; **Fable is highlighted in magenta** because it draws on a separate usage-credits pool that `rate_limits` doesn't cover

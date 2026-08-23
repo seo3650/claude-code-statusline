@@ -71,11 +71,22 @@ esac
 cwd=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // ""')
 dir_display="${cwd/#$HOME/~}"
 
-remaining=$(echo "$input" | jq -r '.context_window.remaining_percentage // 0')
+# At session start Claude Code has not made an API call yet, so .context_window
+# is absent from stdin entirely. Defaulting remaining to 0 there computed
+# used = 100 - 0 and flashed a full red "ctx 100%" bar until the first
+# response landed — the exact opposite of the truth. Fall back to empty and
+# render "?" instead, same as the rate-limit windows do when they have no
+# reading yet; color_for_pct and make_bar already treat non-numeric input as
+# "unknown" (dim empty bar).
+remaining=$(echo "$input" | jq -r '.context_window.remaining_percentage // empty')
 cost=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
 cost_fmt=$(printf '%.2f' "$cost" 2>/dev/null || echo "$cost")
-remaining_int=${remaining%.*}
-used_int=$((100 - remaining_int))
+if [ -z "$remaining" ]; then
+  used_int="?"
+else
+  remaining_int=${remaining%.*}
+  used_int=$((100 - remaining_int))
+fi
 
 # --- Effort level (reasoning effort: low/medium/high/xhigh) ---
 effort=$(echo "$input" | jq -r '.effort.level // ""')
