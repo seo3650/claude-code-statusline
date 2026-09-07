@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import time
 import uuid
 
 
@@ -32,8 +33,10 @@ def main():
         codex_args = ["resume", args.thread]
     if args.thread and codex_args[:2] != ["resume", args.thread]:
         parser.error("Codex arguments must resume the same thread UUID")
+    started_at = time.time()
+    inner_args = ["-c", "tui.status_line=[]", *codex_args]
     command = shlex.join(
-        ["env", "CODEX_STATUSLINE_INNER=1", str(root / "codex-launch"), *codex_args]
+        ["env", "CODEX_STATUSLINE_INNER=1", str(root / "codex-launch"), *inner_args]
     )
     subprocess.run(
         prefix + ["new-session", "-d", "-s", name, "-x", "160", "-y", "45", command],
@@ -44,6 +47,8 @@ def main():
         footer_args = ["python3", str(root / "live.py"), "--cwd", str(Path.cwd())]
         if args.thread:
             footer_args += ["--thread", args.thread]
+        else:
+            footer_args += ["--started-at", str(started_at)]
         footer = shlex.join(footer_args + ["--watch"])
         subprocess.run(
             prefix + ["split-window", "-t", name + ":0", "-v", "-l", "1", footer],
