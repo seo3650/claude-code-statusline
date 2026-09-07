@@ -15,6 +15,17 @@ FILES = [
 ]
 
 
+def is_managed_entry(entry, real, source_launcher, current_install):
+    if entry.is_symlink() and entry.resolve() == real.resolve():
+        return True
+    if not entry.is_file() or entry.is_symlink():
+        return False
+    deployed = entry.read_bytes()
+    return deployed == source_launcher.read_bytes() or (
+        current_install.is_file() and deployed == current_install.read_bytes()
+    )
+
+
 def main():
     source = Path(__file__).resolve().parent
     home = Path.home()
@@ -24,17 +35,13 @@ def main():
     if not real.is_file():
         raise SystemExit("Standalone Codex binary not found; install Codex first.")
     if entry.exists() or entry.is_symlink():
-        expected = entry.is_symlink() and entry.resolve() == real.resolve()
-        installed = (
-            entry.is_file()
-            and not entry.is_symlink()
-            and entry.read_bytes() == (source / "codex-launch").read_bytes()
-        )
-        if not expected and not installed:
+        if not is_managed_entry(
+            entry, real, source / "codex-launch", target / "codex-launch"
+        ):
             raise SystemExit(
                 "Existing codex command is customized; preserved. Inspect it before installing."
             )
-        if expected:
+        if entry.is_symlink() and entry.resolve() == real.resolve():
             backup = home / ".local/share/codex-statusline-backups" / uuid.uuid4().hex
             backup.mkdir(parents=True, mode=0o700)
             shutil.copy2(entry, backup / "codex", follow_symlinks=False)

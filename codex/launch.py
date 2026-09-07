@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resume a Codex thread above a Claude-style one-row metrics pane."""
+"""Run Codex above a Claude-style one-row metrics pane."""
 import argparse
 from pathlib import Path
 import re
@@ -10,10 +10,17 @@ import uuid
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("thread", help="Existing Codex thread UUID")
+    parser.add_argument("thread", nargs="?", help="Existing Codex thread UUID")
+    parser.add_argument(
+        "--new",
+        action="store_true",
+        help="Start an interactive thread instead of resuming",
+    )
     parser.add_argument("codex_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
-    if not re.fullmatch(r"[0-9a-fA-F-]{36}", args.thread):
+    if args.new == bool(args.thread):
+        parser.error("Choose exactly one of --new or an existing thread UUID")
+    if args.thread and not re.fullmatch(r"[0-9a-fA-F-]{36}", args.thread):
         parser.error("Expected a thread UUID")
     root = Path(__file__).resolve().parent
     name = "codex-" + uuid.uuid4().hex[:10]
@@ -21,9 +28,9 @@ def main():
     codex_args = args.codex_args
     if codex_args[:1] == ["--"]:
         codex_args = codex_args[1:]
-    if not codex_args:
+    if not codex_args and args.thread:
         codex_args = ["resume", args.thread]
-    if codex_args[:2] != ["resume", args.thread]:
+    if args.thread and codex_args[:2] != ["resume", args.thread]:
         parser.error("Codex arguments must resume the same thread UUID")
     command = shlex.join(
         ["env", "CODEX_STATUSLINE_INNER=1", str(root / "codex-launch"), *codex_args]
@@ -34,9 +41,10 @@ def main():
     )
     try:
         subprocess.run(prefix + ["set-option", "-t", name, "status", "off"], check=True)
-        footer = shlex.join(
-            ["python3", str(root / "live.py"), "--thread", args.thread, "--watch"]
-        )
+        footer_args = ["python3", str(root / "live.py"), "--cwd", str(Path.cwd())]
+        if args.thread:
+            footer_args += ["--thread", args.thread]
+        footer = shlex.join(footer_args + ["--watch"])
         subprocess.run(
             prefix + ["split-window", "-t", name + ":0", "-v", "-l", "1", footer],
             check=True,

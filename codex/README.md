@@ -37,10 +37,12 @@ python3 ~/.local/share/codex-statusline/statusline.py --demo
 설치기는 명시된 소스 파일만 복사하고 기존 Codex 실행 symlink를 백업합니다.
 다음부터 `codex`를 직접 실행해도 열린 파일 수 soft limit을 최대 4096까지 높입니다.
 hard limit과 시스템 전체 설정은 바꾸지 않습니다. 현재 실행 중인 프로세스에는
-적용되지 않으므로 대화를 마친 뒤 기존 thread를 `codex resume`로 재개해야 합니다.
-터미널에서 `codex resume THREAD_UUID`를 실행하면 별도 tmux 내부가 아닌 경우 하단의
-Claude 스타일 pane도 자동으로 붙습니다. 현재 실행 중인 TUI는 다시 부모를 붙일 수 없으므로
-재개 전까지 기존 내장 바가 계속 보이는 것이 정상입니다.
+적용되지 않으므로 현재 TUI를 종료하고 새 `codex` 프로세스를 시작해야 합니다.
+터미널에서 평소처럼 `codex`를 실행하거나 `codex resume THREAD_UUID`로 재개하면, 별도
+tmux 내부가 아닌 경우 하단의 Claude 스타일 pane도 자동으로 붙습니다. 새 대화는 계정의
+5h/7d 사용량과 초기화 카운트다운을 즉시 표시하고, thread별 context·model·effort는 위쪽
+Codex 내장 줄에 표시합니다. 기존 대화를 UUID로 재개하면 하단 줄에도 thread 값을 표시합니다.
+현재 실행 중인 TUI는 다시 부모를 붙일 수 없으므로 재시작 전까지 기존 내장 바만 보입니다.
 
 실제 한 줄 조회:
 

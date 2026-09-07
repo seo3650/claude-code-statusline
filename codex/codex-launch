@@ -17,14 +17,23 @@ if [ "$soft" != unlimited ] && [ "$soft" -lt "$target" ]; then
 fi
 
 # Codex's native rate-limit items omit reset countdowns. For an interactive
-# resume outside tmux, attach the exact thread to the Claude-style one-row pane.
+# session outside tmux, attach a Claude-style one-row pane. Resumes use the exact
+# thread; new sessions show account resets immediately.
 # The marker prevents recursion when launch.py starts the inner Codex process.
 if [ "${CODEX_STATUSLINE_INNER:-0}" != 1 ] && [ -t 0 ] && [ -t 1 ] && [ -z "${TMUX:-}" ]; then
+    statusline_home=${CODEX_STATUSLINE_HOME:-"$user_home/.local/share/codex-statusline"}
+    launcher=$statusline_home/launch.py
     case "${1:-}:${2:-}" in
         resume:????????-????-????-????-????????????)
-            statusline_home=${CODEX_STATUSLINE_HOME:-"$user_home/.local/share/codex-statusline"}
-            if command -v tmux >/dev/null 2>&1 && [ -f "$statusline_home/launch.py" ]; then
-                exec python3 "$statusline_home/launch.py" "$2" -- "$@"
+            if command -v tmux >/dev/null 2>&1 && [ -f "$launcher" ]; then
+                exec python3 "$launcher" "$2" -- "$@"
+            fi
+            ;;
+        exec:*|e:*|review:*|login:*|logout:*|mcp:*|plugin:*|agents:*|app-server:*|remote-control:*|app:*|completion:*|update:*|doctor:*|sandbox:*|debug:*|apply:*|queue:*|archive:*|delete:*|migrate-rollouts:*|unarchive:*|fork:*|cloud:*|exec-server:*|features:*|help:*)
+            ;;
+        *)
+            if command -v tmux >/dev/null 2>&1 && [ -f "$launcher" ]; then
+                exec python3 "$launcher" --new -- "$@"
             fi
             ;;
     esac
