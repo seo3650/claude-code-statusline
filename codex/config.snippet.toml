@@ -1,0 +1,4 @@
+# Merge into your existing [tui]; never replace the whole configuration.
+[tui]
+status_line = ["current-dir", "git-branch", "context-used", "five-hour-limit", "weekly-limit", "estimated-thread-cost", "model-with-reasoning"]
+status_line_use_colors = true
