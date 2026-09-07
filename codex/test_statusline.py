@@ -16,8 +16,8 @@ class StatuslineTests(unittest.TestCase):
             False,
         )
         self.assertNotIn("90%", line)
-        self.assertIn("$?", line)
-        self.assertIn("ctx ████████ ?%", line)
+        self.assertNotIn("$?", line)
+        self.assertNotIn("ctx", line)
 
     def test_countdown_parity(self):
         self.assertIn("(in 5d21h)", countdown(5 * 86400 + 21 * 3600, 0))

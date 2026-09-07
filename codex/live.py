@@ -10,6 +10,8 @@ import time
 from rpc import CodexRPC
 from statusline import render
 
+THREAD_ID = re.compile(r"([0-9a-fA-F-]{36})\.jsonl$")
+
 
 def context_percent(path):
     if not path:
@@ -61,7 +63,21 @@ def git(cwd, *args):
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def snapshot(thread_id, cwd):
+def _recent_thread_ids(started_at):
+    home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).resolve()
+    candidates = []
+    for path in (home / "sessions").glob("**/*.jsonl"):
+        try:
+            modified = path.stat().st_mtime
+        except OSError:
+            continue
+        match = THREAD_ID.search(path.name)
+        if match and modified >= started_at - 2:
+            candidates.append((modified, match.group(1)))
+    return [thread_id for _modified, thread_id in sorted(candidates, reverse=True)]
+
+
+def snapshot(thread_id, cwd, started_at=None):
     now = time.time()
     result = {"cwd": cwd}
     with CodexRPC(cwd=cwd) as rpc:
@@ -78,17 +94,33 @@ def snapshot(thread_id, cwd):
                     "resets_at": window.get("resetsAt"),
                     "observed_at": now,
                 }
+        thread = None
         if thread_id:
             thread = rpc.call(
                 "thread/read",
                 {"threadId": thread_id, "includeTurns": False},
                 timeout=15,
             )["thread"]
+        elif started_at:
+            wanted_cwd = Path(cwd).resolve()
+            for candidate_id in _recent_thread_ids(started_at):
+                candidate = rpc.call(
+                    "thread/read",
+                    {"threadId": candidate_id, "includeTurns": False},
+                    timeout=15,
+                )["thread"]
+                candidate_cwd = candidate.get("cwd")
+                if candidate_cwd and Path(candidate_cwd).resolve() == wanted_cwd:
+                    thread_id = candidate_id
+                    thread = candidate
+                    break
+        if thread:
             cwd = thread.get("cwd") or cwd
             result.update(
                 cwd=cwd, model=thread.get("model"), effort=thread.get("reasoningEffort")
             )
             result["context_percent"] = context_percent(thread.get("path"))
+            result["_thread_id"] = thread_id
     result["branch"] = git(cwd, "symbolic-ref", "--short", "HEAD") or git(
         cwd, "rev-parse", "--short", "HEAD"
     )
@@ -104,13 +136,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--thread")
     parser.add_argument("--cwd", default=os.getcwd())
+    parser.add_argument("--started-at", type=float)
     parser.add_argument("--watch", action="store_true")
     args = parser.parse_args()
     if args.thread and not re.fullmatch(r"[0-9a-fA-F-]{36}", args.thread):
         parser.error("Expected a thread UUID")
+    thread_id = args.thread
     while True:
         try:
-            data = snapshot(args.thread, args.cwd)
+            data = snapshot(thread_id, args.cwd, args.started_at)
+            thread_id = data.get("_thread_id") or thread_id
             failure = False
         except Exception:
             data = {"cwd": args.cwd}
@@ -124,7 +159,7 @@ def main():
             print(text)
         if not args.watch:
             return
-        time.sleep(60)
+        time.sleep(60 if thread_id else 2)
 
 
 if __name__ == "__main__":

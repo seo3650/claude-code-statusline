@@ -73,7 +73,9 @@ def render(data, now=None, color=True):
         directory += f" {DIM}git:({RESET}{BLUE}{clean(branch)}{RESET}{DIM}){RESET}"
         if data.get("dirty"):
             directory += f" \033[33m{BOLD}*{RESET}"
-    parts = [directory, metric("ctx", data.get("context_percent"))]
+    parts = [directory]
+    if data.get("context_percent") is not None:
+        parts.append(metric("ctx", data.get("context_percent")))
     for label, key in [("5h", "five_hour"), ("7d", "seven_day")]:
         window = data.get(key) or {}
         reset = number(window.get("resets_at"))
@@ -86,12 +88,10 @@ def render(data, now=None, color=True):
             + (countdown(reset, now) if not stale and not expired else "")
         )
     cost = number(data.get("cost_usd"))
-    parts.append(
-        f"{GREEN}${cost:.2f}{RESET}"
-        if cost is not None and cost >= 0
-        else f"{DIM}$?{RESET}"
-    )
-    parts.append(f'{BOLD}{clean(data.get("model") or "?")}{RESET}')
+    if cost is not None and cost >= 0:
+        parts.append(f"{GREEN}${cost:.2f}{RESET}")
+    if data.get("model"):
+        parts.append(f'{BOLD}{clean(data["model"])}{RESET}')
     if data.get("effort"):
         parts.append(f'{CYAN}{clean(data["effort"])}{RESET}')
     line = f" {DIM}·{RESET} ".join(parts)
