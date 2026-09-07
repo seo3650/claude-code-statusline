@@ -1,0 +1,10 @@
+#!/bin/sh
+# Keep the hard limit unchanged. Only the new Codex process inherits this limit.
+soft=$(ulimit -S -n)
+hard=$(ulimit -H -n)
+target=4096
+case "$hard" in unlimited) ;; *) [ "$hard" -lt "$target" ] && target=$hard ;; esac
+if [ "$soft" != unlimited ] && [ "$soft" -lt "$target" ]; then
+    ulimit -S -n "$target" || { echo 'Codex: cannot raise file descriptor limit' >&2; exit 1; }
+fi
+exec "${CODEX_REAL_BIN:-$HOME/.codex/packages/standalone/current/bin/codex}" "$@"

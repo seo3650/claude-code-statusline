@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""Resume a Codex thread above a Claude-style one-row metrics pane."""
+import argparse
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import uuid
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("thread", help="Existing Codex thread UUID")
+    args = parser.parse_args()
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", args.thread):
+        parser.error("Expected a thread UUID")
+    root = Path(__file__).resolve().parent
+    name = "codex-" + uuid.uuid4().hex[:10]
+    prefix = ["tmux", "-L", "codex-statusline"]
+    command = shlex.join([str(root / "codex-launch"), "resume", args.thread])
+    subprocess.run(
+        prefix + ["new-session", "-d", "-s", name, "-x", "160", "-y", "45", command],
+        check=True,
+    )
+    try:
+        subprocess.run(prefix + ["set-option", "-t", name, "status", "off"], check=True)
+        footer = shlex.join(
+            ["python3", str(root / "live.py"), "--thread", args.thread, "--watch"]
+        )
+        subprocess.run(
+            prefix + ["split-window", "-t", name + ":0", "-v", "-l", "1", footer],
+            check=True,
+        )
+        subprocess.run(prefix + ["select-pane", "-t", name + ":0.0"], check=True)
+    except Exception:
+        subprocess.run(
+            prefix + ["kill-session", "-t", name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        raise
+    # Detaching keeps the session alive. Never kill a user's active Codex on detach.
+    subprocess.run(prefix + ["attach-session", "-t", name], check=True)
+
+
+if __name__ == "__main__":
+    main()

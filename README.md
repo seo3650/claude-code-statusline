@@ -76,3 +76,8 @@ See [`settings.snippet.json`](./settings.snippet.json) for the same block.
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+## Codex에서도 사용
+
+같은 디자인을 Codex에서 사용하는 방법은 [Codex 설정과 표시기](codex/README.md)를
+참조하세요. 내장 statusline의 제약과 실제 값/알 수 없는 값을 구분해 설명합니다.
