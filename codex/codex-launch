@@ -1,5 +1,13 @@
 #!/bin/sh
 # Keep the hard limit unchanged. Only the new Codex process inherits this limit.
+set -eu
+if [ -n "${HOME:-}" ]; then
+    user_home=$HOME
+else
+    # The installer places this command in ~/.local/bin. Some Codex sandbox
+    # helpers pass HOME as an empty string, where shell tilde expansion is unsafe.
+    user_home=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+fi
 soft=$(ulimit -S -n)
 hard=$(ulimit -H -n)
 target=4096
@@ -7,4 +15,18 @@ case "$hard" in unlimited) ;; *) [ "$hard" -lt "$target" ] && target=$hard ;; es
 if [ "$soft" != unlimited ] && [ "$soft" -lt "$target" ]; then
     ulimit -S -n "$target" || { echo 'Codex: cannot raise file descriptor limit' >&2; exit 1; }
 fi
-exec "${CODEX_REAL_BIN:-$HOME/.codex/packages/standalone/current/bin/codex}" "$@"
+
+# Codex's native rate-limit items omit reset countdowns. For an interactive
+# resume outside tmux, attach the exact thread to the Claude-style one-row pane.
+# The marker prevents recursion when launch.py starts the inner Codex process.
+if [ "${CODEX_STATUSLINE_INNER:-0}" != 1 ] && [ -t 0 ] && [ -t 1 ] && [ -z "${TMUX:-}" ]; then
+    case "${1:-}:${2:-}" in
+        resume:????????-????-????-????-????????????)
+            statusline_home=${CODEX_STATUSLINE_HOME:-"$user_home/.local/share/codex-statusline"}
+            if command -v tmux >/dev/null 2>&1 && [ -f "$statusline_home/launch.py" ]; then
+                exec python3 "$statusline_home/launch.py" "$2" -- "$@"
+            fi
+            ;;
+    esac
+fi
+exec "${CODEX_REAL_BIN:-$user_home/.codex/packages/standalone/current/bin/codex}" "$@"

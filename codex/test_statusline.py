@@ -21,6 +21,7 @@ class StatuslineTests(unittest.TestCase):
 
     def test_countdown_parity(self):
         self.assertIn("(in 5d21h)", countdown(5 * 86400 + 21 * 3600, 0))
+        self.assertIn("(in 4h11m)", countdown(4 * 3600 + 11 * 60, 0))
         self.assertIn("(in <1m)", countdown(30, 0))
 
     def test_terminal_injection_removed(self):

@@ -11,13 +11,23 @@ import uuid
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("thread", help="Existing Codex thread UUID")
+    parser.add_argument("codex_args", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", args.thread):
         parser.error("Expected a thread UUID")
     root = Path(__file__).resolve().parent
     name = "codex-" + uuid.uuid4().hex[:10]
     prefix = ["tmux", "-L", "codex-statusline"]
-    command = shlex.join([str(root / "codex-launch"), "resume", args.thread])
+    codex_args = args.codex_args
+    if codex_args[:1] == ["--"]:
+        codex_args = codex_args[1:]
+    if not codex_args:
+        codex_args = ["resume", args.thread]
+    if codex_args[:2] != ["resume", args.thread]:
+        parser.error("Codex arguments must resume the same thread UUID")
+    command = shlex.join(
+        ["env", "CODEX_STATUSLINE_INNER=1", str(root / "codex-launch"), *codex_args]
+    )
     subprocess.run(
         prefix + ["new-session", "-d", "-s", name, "-x", "160", "-y", "45", command],
         check=True,
