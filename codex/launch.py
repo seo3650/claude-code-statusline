@@ -9,6 +9,29 @@ import time
 import uuid
 
 
+def pane_id(prefix, target):
+    result = subprocess.run(
+        prefix + ["display-message", "-p", "-t", target, "#{pane_id}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    value = result.stdout.strip()
+    if not re.fullmatch(r"%[0-9]+", value):
+        raise RuntimeError("tmux returned an invalid pane id")
+    return value
+
+
+def install_exit_hook(prefix, session, main_pane, footer_pane):
+    hook = (
+        f"if-shell -F '#{{==:#{{hook_pane}},{main_pane}}}' "
+        f"'kill-pane -t {footer_pane}' ''"
+    )
+    subprocess.run(
+        prefix + ["set-hook", "-t", session, "pane-exited", hook], check=True
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("thread", nargs="?", help="Existing Codex thread UUID")
@@ -44,6 +67,7 @@ def main():
     )
     try:
         subprocess.run(prefix + ["set-option", "-t", name, "status", "off"], check=True)
+        main_pane = pane_id(prefix, name + ":0.0")
         footer_args = ["python3", str(root / "live.py"), "--cwd", str(Path.cwd())]
         if args.thread:
             footer_args += ["--thread", args.thread]
@@ -54,6 +78,8 @@ def main():
             prefix + ["split-window", "-t", name + ":0", "-v", "-l", "1", footer],
             check=True,
         )
+        footer_pane = pane_id(prefix, name + ":0.1")
+        install_exit_hook(prefix, name, main_pane, footer_pane)
         subprocess.run(prefix + ["select-pane", "-t", name + ":0.0"], check=True)
     except Exception:
         subprocess.run(
