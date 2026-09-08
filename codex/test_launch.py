@@ -1,31 +1,26 @@
-import subprocess
 import unittest
 from unittest import mock
 
 import launch
 
 
-class PaneLifecycleTests(unittest.TestCase):
+class StatusBarLifecycleTests(unittest.TestCase):
     @mock.patch("launch.subprocess.run")
-    def test_pane_id_rejects_untrusted_tmux_output(self, run):
-        run.return_value = subprocess.CompletedProcess([], 0, stdout="unexpected\n")
-        with self.assertRaisesRegex(RuntimeError, "invalid pane id"):
-            launch.pane_id(["tmux", "-L", "test"], "session:0.0")
-
-    @mock.patch("launch.subprocess.run")
-    def test_primary_exit_hook_kills_only_footer_pane(self, run):
+    def test_status_bar_uses_no_footer_pane(self, run):
         prefix = ["tmux", "-L", "codex-statusline"]
-        launch.install_exit_hook(prefix, "codex-test", "%12", "%13")
-        run.assert_called_once_with(
+        launch.configure_status_bar(prefix, "codex-test", "python3 live.py")
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertFalse(any("split-window" in command for command in commands))
+        self.assertIn(
             prefix
             + [
-                "set-hook",
+                "run-shell",
+                "-b",
                 "-t",
-                "codex-test",
-                "pane-exited",
-                "if-shell -F '#{==:#{hook_pane},%12}' 'kill-pane -t %13' ''",
+                "codex-test:0.0",
+                "python3 live.py",
             ],
-            check=True,
+            commands,
         )
 
 

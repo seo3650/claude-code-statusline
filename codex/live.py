@@ -8,9 +8,19 @@ import re
 import subprocess
 import time
 from rpc import CodexRPC
-from statusline import render
+from statusline import BOLD, BLUE, CYAN, DIM, GREEN, RESET, render
 
 THREAD_ID = re.compile(r"([0-9a-fA-F-]{36})\.jsonl$")
+TMUX_STYLES = {
+    RESET: "#[default]",
+    DIM: "#[dim]",
+    BOLD: "#[bold]",
+    GREEN: "#[fg=green]",
+    BLUE: "#[fg=blue]",
+    CYAN: "#[fg=cyan]",
+    "\033[31m": "#[fg=red]",
+    "\033[33m": "#[fg=yellow]",
+}
 
 
 def context_percent(path):
@@ -136,17 +146,82 @@ def refresh_seconds(thread_id, data):
     return 60 if thread_id and data.get("context_percent") is not None else 2
 
 
+def render_tmux(data, now=None):
+    safe = dict(data)
+    for key in ("cwd", "branch", "model", "effort"):
+        if safe.get(key) is not None:
+            # In a tmux format, ## is a literal #. This prevents untrusted git
+            # metadata or paths from injecting status-format directives.
+            safe[key] = str(safe[key]).replace("#", "##")
+    line = render(safe, now, color=True)
+    for ansi, tmux in TMUX_STYLES.items():
+        line = line.replace(ansi, tmux)
+    return line
+
+
+def tmux_session_exists(socket, session):
+    return (
+        subprocess.run(
+            ["tmux", "-L", socket, "has-session", "-t", session],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        ).returncode
+        == 0
+    )
+
+
+def publish_tmux(socket, session, line):
+    return (
+        subprocess.run(
+            [
+                "tmux",
+                "-L",
+                socket,
+                "set-option",
+                "-t",
+                session,
+                "status-format[0]",
+                line,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        ).returncode
+        == 0
+    )
+
+
+def wait_for_refresh(seconds, socket=None, session=None):
+    deadline = time.monotonic() + seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+        time.sleep(min(0.5, remaining))
+        if socket and session and not tmux_session_exists(socket, session):
+            return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--thread")
     parser.add_argument("--cwd", default=os.getcwd())
     parser.add_argument("--started-at", type=float)
     parser.add_argument("--watch", action="store_true")
+    parser.add_argument("--tmux-socket")
+    parser.add_argument("--tmux-session")
     args = parser.parse_args()
     if args.thread and not re.fullmatch(r"[0-9a-fA-F-]{36}", args.thread):
         parser.error("Expected a thread UUID")
+    if bool(args.tmux_socket) != bool(args.tmux_session):
+        parser.error("--tmux-socket and --tmux-session must be used together")
     thread_id = args.thread
     while True:
+        if args.tmux_session and not tmux_session_exists(
+            args.tmux_socket, args.tmux_session
+        ):
+            return
         try:
             data = snapshot(thread_id, args.cwd, args.started_at)
             thread_id = data.get("_thread_id") or thread_id
@@ -154,16 +229,26 @@ def main():
         except Exception:
             data = {"cwd": args.cwd}
             failure = True
-        text = render(data, color=os.isatty(1))
+        text = (
+            render_tmux(data)
+            if args.tmux_session
+            else render(data, color=os.isatty(1))
+        )
         if failure:
             text += " · 조회 실패"
-        if args.watch:
+        if args.tmux_session:
+            if not publish_tmux(args.tmux_socket, args.tmux_session, text):
+                return
+        elif args.watch:
             print("\033[?7l\r\033[2K" + text, end="", flush=True)
         else:
             print(text)
         if not args.watch:
             return
-        time.sleep(refresh_seconds(thread_id, data))
+        if not wait_for_refresh(
+            refresh_seconds(thread_id, data), args.tmux_socket, args.tmux_session
+        ):
+            return
 
 
 if __name__ == "__main__":

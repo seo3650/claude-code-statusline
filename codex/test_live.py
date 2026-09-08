@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 import live
 
@@ -35,6 +36,22 @@ class ThreadDiscoveryTests(unittest.TestCase):
         thread = "11111111-2222-3333-4444-555555555555"
         self.assertEqual(live.refresh_seconds(thread, {"_thread_id": thread}), 2)
         self.assertEqual(live.refresh_seconds(thread, {"context_percent": 0}), 60)
+
+    @mock.patch("live.tmux_session_exists", side_effect=[True, False])
+    @mock.patch("live.time.sleep")
+    @mock.patch("live.time.monotonic", side_effect=[0, 0, 0.5])
+    def test_refresh_wait_stops_when_tmux_session_exits(
+        self, _monotonic, _sleep, _session_exists
+    ):
+        self.assertFalse(live.wait_for_refresh(60, "socket", "session"))
+
+    def test_tmux_renderer_uses_styles_and_escapes_format_injection(self):
+        line = live.render_tmux(
+            {"cwd": "~/repo", "branch": "#[bg=red]", "five_hour": {}}, now=100
+        )
+        self.assertNotIn("\033", line)
+        self.assertIn("#[fg=", line)
+        self.assertIn("##[bg=red]", line)
 
 
 if __name__ == "__main__":
