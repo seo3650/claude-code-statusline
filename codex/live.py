@@ -132,6 +132,10 @@ def snapshot(thread_id, cwd, started_at=None):
     return result
 
 
+def refresh_seconds(thread_id, data):
+    return 60 if thread_id and data.get("context_percent") is not None else 2
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--thread")
@@ -159,7 +163,7 @@ def main():
             print(text)
         if not args.watch:
             return
-        time.sleep(60 if thread_id else 2)
+        time.sleep(refresh_seconds(thread_id, data))
 
 
 if __name__ == "__main__":
