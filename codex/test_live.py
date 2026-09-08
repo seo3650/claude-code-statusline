@@ -31,6 +31,11 @@ class ThreadDiscoveryTests(unittest.TestCase):
                 else:
                     os.environ["CODEX_HOME"] = previous
 
+    def test_refresh_stays_fast_until_context_metric_arrives(self):
+        thread = "11111111-2222-3333-4444-555555555555"
+        self.assertEqual(live.refresh_seconds(thread, {"_thread_id": thread}), 2)
+        self.assertEqual(live.refresh_seconds(thread, {"context_percent": 0}), 60)
+
 
 if __name__ == "__main__":
     unittest.main()
