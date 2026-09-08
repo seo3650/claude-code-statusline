@@ -13,7 +13,8 @@
 
 Codex CLI 0.153.4의 내장 `tui.status_line`은 항목 목록만 받습니다. Claude처럼
 셸 스크립트의 ANSI 출력을 직접 넣을 수 없습니다. `config.snippet.toml`은 내장 바의
-항목 순서를 맞추며, 동일한 디자인은 별도 한 줄 tmux pane에서 표시합니다.
+항목 순서를 맞추며, 동일한 디자인은 tmux의 하단 status bar에서 표시합니다. Codex
+채팅 영역은 단일 pane을 그대로 사용하므로 별도 경계선이나 보조 pane이 생기지 않습니다.
 Codex 바이너리나 TUI 화면 출력을 수정하지 않습니다.
 
 실제 5h/7d 사용량은 Codex app-server의 계정 조회를 사용합니다. 활성 thread UUID를
@@ -39,7 +40,7 @@ python3 ~/.local/share/codex-statusline/statusline.py --demo
 hard limit과 시스템 전체 설정은 바꾸지 않습니다. 현재 실행 중인 프로세스에는
 적용되지 않으므로 현재 TUI를 종료하고 새 `codex` 프로세스를 시작해야 합니다.
 터미널에서 평소처럼 `codex`를 실행하거나 `codex resume THREAD_UUID`로 재개하면, 별도
-tmux 내부가 아닌 경우 하단의 Claude 스타일 pane도 자동으로 붙습니다. 새 대화는 계정의
+tmux 내부가 아닌 경우 하단의 Claude 스타일 status bar도 자동으로 붙습니다. 새 대화는 계정의
 5h/7d 사용량과 초기화 카운트다운을 즉시 표시하고, thread별 context·model·effort는 위쪽
 처음 수 초 동안은 확인된 계정·Git 값만 표시한 뒤 새 thread를 자동으로 찾아
 context·model·effort를 채웁니다. 커스텀 줄이 붙은 내부 Codex에서는 중복되는 내장 줄을
