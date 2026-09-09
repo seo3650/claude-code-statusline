@@ -1,3 +1,200 @@
+diff --git a/codex-rs/tui/src/app/background_requests.rs b/codex-rs/tui/src/app/background_requests.rs
+index c39f5c6..be3cfb5 100644
+--- a/codex-rs/tui/src/app/background_requests.rs
++++ b/codex-rs/tui/src/app/background_requests.rs
+@@ -93,12 +93,16 @@ impl App {
+         else {
+             return;
+         };
++        if origin == RateLimitRefreshOrigin::StatusLinePoll {
++            tracing::debug!("status line account usage poll started");
++        }
+         let request_handle = app_server.request_handle();
+         let app_event_tx = self.app_event_tx.clone();
+         tokio::spawn(async move {
+             let request = fetch_account_rate_limits(request_handle);
+             let result = match origin {
+-                RateLimitRefreshOrigin::Recovery
++                RateLimitRefreshOrigin::StatusLinePoll
++                | RateLimitRefreshOrigin::Recovery
+                 | RateLimitRefreshOrigin::ResetConsume { .. }
+                 | RateLimitRefreshOrigin::ResetPicker { .. } => {
+                     tokio::time::timeout(RATE_LIMIT_RESET_REQUEST_TIMEOUT, request)
+diff --git a/codex-rs/tui/src/app/event_dispatch.rs b/codex-rs/tui/src/app/event_dispatch.rs
+index d2ea7c5..4ba4c65 100644
+--- a/codex-rs/tui/src/app/event_dispatch.rs
++++ b/codex-rs/tui/src/app/event_dispatch.rs
+@@ -1288,6 +1288,9 @@ impl App {
+                         false
+                     }
+                 };
++                if origin == RateLimitRefreshOrigin::StatusLinePoll {
++                    tracing::debug!(accepted, succeeded = result.is_ok(), "status line account usage poll finished");
++                }
+                 match result {
+                 Ok(response) => {
+                     let rate_limit_reset_credits = response.rate_limit_reset_credits.clone();
+@@ -1300,7 +1303,7 @@ impl App {
+                         Vec::new()
+                     };
+                     match origin {
+-                        RateLimitRefreshOrigin::Recovery => {
++                        RateLimitRefreshOrigin::Recovery | RateLimitRefreshOrigin::StatusLinePoll => {
+                             for snapshot in snapshots {
+                                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
+                             }
+@@ -1361,7 +1364,7 @@ impl App {
+                     // A failed read is not authoritative recovery. Keep the last valid banner.
+                     tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
+                     match origin {
+-                        RateLimitRefreshOrigin::Recovery => {},
++                        RateLimitRefreshOrigin::Recovery | RateLimitRefreshOrigin::StatusLinePoll => {},
+                         RateLimitRefreshOrigin::StartupPrefetch {
+                             reset_hint_request_id,
+                         } => {
+diff --git a/codex-rs/tui/src/app/rate_limit_refresh.rs b/codex-rs/tui/src/app/rate_limit_refresh.rs
+index 51828e8..fd00dfd 100644
+--- a/codex-rs/tui/src/app/rate_limit_refresh.rs
++++ b/codex-rs/tui/src/app/rate_limit_refresh.rs
+@@ -5,6 +5,8 @@ use crate::app_event::RateLimitRefreshOrigin;
+ #[derive(Default)]
+ pub(super) struct RateLimitRefreshState {
+     next_id: u64,
++    last_status_line_poll: Option<std::time::Instant>,
++    pending_status_line_poll: Option<(u64, u64)>,
+     applied_id: u64,
+     recovery: Option<PendingRecovery>,
+ }
+@@ -37,6 +39,17 @@ impl RateLimitRefreshState {
+         origin: RateLimitRefreshOrigin,
+         generation: &mut u64,
+     ) -> Option<(u64, u64)> {
++        if origin == RateLimitRefreshOrigin::StatusLinePoll {
++            let now = std::time::Instant::now();
++            if self.pending_status_line_poll.is_some()
++                || self.last_status_line_poll.is_some_and(|last| {
++                    now.saturating_duration_since(last) < std::time::Duration::from_secs(60)
++                })
++            {
++                return None;
++            }
++            self.last_status_line_poll = Some(now);
++        }
+         if matches!(origin, RateLimitRefreshOrigin::Recovery) {
+             // A new hard error supersedes a post-reset read that started before the error.
+             if self
+@@ -51,6 +64,9 @@ impl RateLimitRefreshState {
+         }
+         self.next_id = self.next_id.wrapping_add(1);
+         let request = (self.next_id, *generation);
++        if origin == RateLimitRefreshOrigin::StatusLinePoll {
++            self.pending_status_line_poll = Some(request);
++        }
+         // The post-reset read takes over the hold from the invalidated recovery request.
+         if matches!(
+             origin,
+@@ -73,6 +89,9 @@ impl RateLimitRefreshState {
+         current_generation: u64,
+         status: RateLimitReadStatus,
+     ) -> RateLimitRefreshOutcome {
++        if self.pending_status_line_poll == Some((request_id, generation)) {
++            self.pending_status_line_poll = None;
++        }
+         if self
+             .recovery
+             .as_ref()
+@@ -94,3 +113,78 @@ impl RateLimitRefreshState {
+         RateLimitRefreshOutcome::Apply
+     }
+ }
++
++#[cfg(test)]
++mod idle_poll_tests {
++    use super::*;
++    use std::time::{Duration, Instant};
++
++    #[test]
++    fn idle_poll_is_throttled_and_pending_requests_are_coalesced() {
++        let mut state = RateLimitRefreshState::default();
++        let mut generation = 0;
++        let (id, gen_id) = state
++            .start(RateLimitRefreshOrigin::StatusLinePoll, &mut generation)
++            .unwrap();
++        assert!(
++            state
++                .start(RateLimitRefreshOrigin::StatusLinePoll, &mut generation)
++                .is_none()
++        );
++        state.last_status_line_poll = Some(Instant::now() - Duration::from_secs(61));
++        assert!(
++            state
++                .start(RateLimitRefreshOrigin::StatusLinePoll, &mut generation)
++                .is_none()
++        );
++        assert_eq!(
++            state.finish(id, gen_id, generation, RateLimitReadStatus::Succeeded),
++            RateLimitRefreshOutcome::Apply
++        );
++        assert!(
++            state
++                .start(RateLimitRefreshOrigin::StatusLinePoll, &mut generation)
++                .is_some()
++        );
++    }
++
++    #[test]
++    fn failed_idle_poll_keeps_snapshot_and_waits_before_retry() {
++        let mut state = RateLimitRefreshState::default();
++        let mut generation = 0;
++        let (id, gen_id) = state
++            .start(RateLimitRefreshOrigin::StatusLinePoll, &mut generation)
++            .unwrap();
++        assert_eq!(
++            state.finish(id, gen_id, generation, RateLimitReadStatus::Failed),
++            RateLimitRefreshOutcome::Ignore
++        );
++        assert!(state.pending_status_line_poll.is_none());
++        assert!(
++            state
++                .start(RateLimitRefreshOrigin::StatusLinePoll, &mut generation)
++                .is_none()
++        );
++        state.last_status_line_poll = Some(Instant::now() - Duration::from_secs(61));
++        assert!(
++            state
++                .start(RateLimitRefreshOrigin::StatusLinePoll, &mut generation)
++                .is_some()
++        );
++    }
++
++    #[test]
++    fn idle_poll_cannot_apply_after_account_generation_changes() {
++        let mut state = RateLimitRefreshState::default();
++        let mut generation = 0;
++        let (id, gen_id) = state
++            .start(RateLimitRefreshOrigin::StatusLinePoll, &mut generation)
++            .unwrap();
++        generation += 1;
++        assert_eq!(
++            state.finish(id, gen_id, generation, RateLimitReadStatus::Succeeded),
++            RateLimitRefreshOutcome::Ignore
++        );
++        assert!(state.pending_status_line_poll.is_none());
++    }
++}
+diff --git a/codex-rs/tui/src/app_event.rs b/codex-rs/tui/src/app_event.rs
+index 1592aef..fb40dd1 100644
+--- a/codex-rs/tui/src/app_event.rs
++++ b/codex-rs/tui/src/app_event.rs
+@@ -162,6 +162,8 @@ pub(crate) struct PluginRemoteSectionError {
+ /// rows before showing redemption choices.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub(crate) enum RateLimitRefreshOrigin {
++    /// Periodic account usage refresh for an idle status line.
++    StatusLinePoll,
+     /// Eagerly fetched after bootstrap for `/status` data and reset availability.
+     StartupPrefetch { reset_hint_request_id: u64 },
+     /// User-initiated via `/status`; the `request_id` correlates with the
 diff --git a/codex-rs/tui/src/bottom_pane/status_line_setup.rs b/codex-rs/tui/src/bottom_pane/status_line_setup.rs
 index a5f728e..bd52327 100644
 --- a/codex-rs/tui/src/bottom_pane/status_line_setup.rs
@@ -234,10 +431,10 @@ index 4783f55..6c79af7 100644
      fn thread_usage_items_share_an_accent_and_dim_separator() {
          let line = status_line_from_segments_with_resolver(
 diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
-index 40eadfa..39191a2 100644
+index 40eadfa..2682c95 100644
 --- a/codex-rs/tui/src/chatwidget.rs
 +++ b/codex-rs/tui/src/chatwidget.rs
-@@ -578,6 +578,12 @@ pub(crate) struct ChatWidget {
+@@ -578,6 +578,13 @@ pub(crate) struct ChatWidget {
      pub(crate) remote_connection: Option<RemoteConnectionStatus>,
      token_info: Option<TokenUsageInfo>,
      token_usage_pending: bool,
@@ -247,10 +444,11 @@ index 40eadfa..39191a2 100644
 +    /// confirmed percentage lets the meter remain stable without changing the semantics of
 +    /// built-in token status items.
 +    status_line_last_context_used_percent: Option<i64>,
++    status_line_last_rate_limit_request: Option<Instant>,
      rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
      refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
      next_status_refresh_request_id: u64,
-@@ -1164,6 +1170,9 @@ impl ChatWidget {
+@@ -1164,6 +1171,9 @@ impl ChatWidget {
          self.bottom_pane
              .set_context_window_pending(/*pending*/ false);
          let percent = self.context_remaining_percent(&info);
@@ -261,19 +459,20 @@ index 40eadfa..39191a2 100644
          self.bottom_pane.set_context_window(percent, used_tokens);
          self.token_info = Some(info);
 diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
-index a1079ac..0f61816 100644
+index a1079ac..8a51bdd 100644
 --- a/codex-rs/tui/src/chatwidget/constructor.rs
 +++ b/codex-rs/tui/src/chatwidget/constructor.rs
-@@ -129,6 +129,7 @@ impl ChatWidget {
+@@ -129,6 +129,8 @@ impl ChatWidget {
              remote_connection: None,
              token_info: None,
              token_usage_pending: false,
 +            status_line_last_context_used_percent: None,
++            status_line_last_rate_limit_request: None,
              rate_limit_snapshots_by_limit_id: BTreeMap::new(),
              refreshing_status_outputs: Vec::new(),
              next_status_refresh_request_id: 0,
 diff --git a/codex-rs/tui/src/chatwidget/status_surfaces.rs b/codex-rs/tui/src/chatwidget/status_surfaces.rs
-index e79c0d3..d293177 100644
+index e79c0d3..2baa080 100644
 --- a/codex-rs/tui/src/chatwidget/status_surfaces.rs
 +++ b/codex-rs/tui/src/chatwidget/status_surfaces.rs
 @@ -12,6 +12,7 @@ use crate::legacy_core::config::Config;
@@ -360,7 +559,7 @@ index e79c0d3..d293177 100644
              tx.send(AppEvent::StatusLineBranchUpdated { cwd, branch });
          });
      }
-@@ -615,14 +678,22 @@ impl ChatWidget {
+@@ -615,14 +678,32 @@ impl ChatWidget {
  
      pub(super) fn refresh_status_line_if_workspace_headline_due(&mut self) {
          let now = Instant::now();
@@ -383,13 +582,23 @@ index e79c0d3..d293177 100644
              self.refresh_status_line();
          }
 +        if compact_usage_visible {
++            if self.should_prefetch_rate_limits()
++                && self.status_line_last_rate_limit_request.is_none_or(|last| {
++                    now.saturating_duration_since(last) >= Duration::from_secs(60)
++                })
++            {
++                self.status_line_last_rate_limit_request = Some(now);
++                self.app_event_tx.send(AppEvent::RefreshRateLimits {
++                    origin: crate::app_event::RateLimitRefreshOrigin::StatusLinePoll,
++                });
++            }
 +            self.frame_requester
 +                .schedule_frame_in(Duration::from_secs(5));
 +        }
      }
  
      pub(crate) fn set_status_line_workspace_headline(
-@@ -714,6 +785,12 @@ impl ChatWidget {
+@@ -714,6 +795,12 @@ impl ChatWidget {
              StatusLineItem::ContextUsed => self
                  .status_line_context_used_percent()
                  .map(|used| format!("Context {used}% used")),
@@ -402,7 +611,7 @@ index e79c0d3..d293177 100644
              StatusLineItem::FiveHourLimit => {
                  let (window, is_secondary) = self
                      .rate_limit_snapshots_by_limit_id
-@@ -722,6 +799,18 @@ impl ChatWidget {
+@@ -722,6 +809,18 @@ impl ChatWidget {
                  let label = limit_label_for_window(window.window_minutes, is_secondary);
                  self.status_line_limit_display(Some(window), &label)
              }
@@ -421,7 +630,7 @@ index e79c0d3..d293177 100644
              StatusLineItem::WeeklyLimit => {
                  let (window, is_secondary) = self
                      .rate_limit_snapshots_by_limit_id
-@@ -730,6 +819,18 @@ impl ChatWidget {
+@@ -730,6 +829,18 @@ impl ChatWidget {
                  let label = limit_label_for_window(window.window_minutes, is_secondary);
                  self.status_line_limit_display(Some(window), &label)
              }
@@ -440,7 +649,7 @@ index e79c0d3..d293177 100644
              StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
              StatusLineItem::ContextWindowSize => self
                  .status_line_context_window_size()
-@@ -1198,3 +1299,66 @@ where
+@@ -1198,3 +1309,66 @@ where
      }
      (items, invalid)
  }
