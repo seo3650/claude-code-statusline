@@ -12,6 +12,9 @@ Codex 0.153.4의 Ratatui `bottom_pane` 안에 Claude statusline과 같은 8칸 �
 빈 칸 모두 `█`을 쓰고 빈 칸만 어둡게 표시합니다. `ctx`는 Codex가 이미 계산한 현재 turn의
 `token_usage`와 model context window를 사용합니다. `5h`와 `7d`는 Codex가 계정 응답에서
 유지하는 rate-limit snapshot을 사용하며, 초기화까지 남은 시간은 5초마다 다시 그립니다.
+새 turn을 처리하는 동안에는 마지막으로 확인된 `ctx` 값을 유지하고, 첫 응답 전에는 어두운
+8칸 막대와 `?`를 표시합니다. 따라서 토큰 집계를 기다리는 짧은 구간에도 항목과 레이아웃이
+사라지지 않습니다.
 
 ## 설치
 
