@@ -1,11 +1,9 @@
 #!/bin/sh
-# Keep the hard limit unchanged. Only the new Codex process inherits this limit.
+# Raise only this Codex process's descriptor limit, then run the native patched CLI.
 set -eu
 if [ -n "${HOME:-}" ]; then
     user_home=$HOME
 else
-    # The installer places this command in ~/.local/bin. Some Codex sandbox
-    # helpers pass HOME as an empty string, where shell tilde expansion is unsafe.
     user_home=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 fi
 soft=$(ulimit -S -n)
@@ -15,27 +13,9 @@ case "$hard" in unlimited) ;; *) [ "$hard" -lt "$target" ] && target=$hard ;; es
 if [ "$soft" != unlimited ] && [ "$soft" -lt "$target" ]; then
     ulimit -S -n "$target" || { echo 'Codex: cannot raise file descriptor limit' >&2; exit 1; }
 fi
-
-# Codex's native rate-limit items omit reset countdowns. For an interactive
-# session outside tmux, attach a Claude-style one-row pane. Resumes use the exact
-# thread; new sessions show account resets immediately.
-# The marker prevents recursion when launch.py starts the inner Codex process.
-if [ "${CODEX_STATUSLINE_INNER:-0}" != 1 ] && [ -t 0 ] && [ -t 1 ] && [ -z "${TMUX:-}" ]; then
-    statusline_home=${CODEX_STATUSLINE_HOME:-"$user_home/.local/share/codex-statusline"}
-    launcher=$statusline_home/launch.py
-    case "${1:-}:${2:-}" in
-        resume:????????-????-????-????-????????????)
-            if command -v tmux >/dev/null 2>&1 && [ -f "$launcher" ]; then
-                exec python3 "$launcher" "$2" -- "$@"
-            fi
-            ;;
-        exec:*|e:*|review:*|login:*|logout:*|mcp:*|plugin:*|agents:*|app-server:*|remote-control:*|app:*|completion:*|update:*|doctor:*|sandbox:*|debug:*|apply:*|queue:*|archive:*|delete:*|migrate-rollouts:*|unarchive:*|fork:*|cloud:*|exec-server:*|features:*|help:*)
-            ;;
-        *)
-            if command -v tmux >/dev/null 2>&1 && [ -f "$launcher" ]; then
-                exec python3 "$launcher" --new -- "$@"
-            fi
-            ;;
-    esac
+patched="${CODEX_PATCHED_BIN:-$user_home/.local/share/codex-statusline/bin/codex}"
+official="${CODEX_REAL_BIN:-$user_home/.codex/packages/standalone/current/bin/codex}"
+if [ -x "$patched" ]; then
+    exec "$patched" "$@"
 fi
-exec "${CODEX_REAL_BIN:-$user_home/.codex/packages/standalone/current/bin/codex}" "$@"
+exec "$official" "$@"
