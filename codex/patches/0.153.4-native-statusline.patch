@@ -1,5 +1,5 @@
 diff --git a/codex-rs/tui/src/bottom_pane/status_line_setup.rs b/codex-rs/tui/src/bottom_pane/status_line_setup.rs
-index a5f728e..d8bae31 100644
+index a5f728e..bd52327 100644
 --- a/codex-rs/tui/src/bottom_pane/status_line_setup.rs
 +++ b/codex-rs/tui/src/bottom_pane/status_line_setup.rs
 @@ -107,12 +107,21 @@ pub(crate) enum StatusLineItem {
@@ -29,7 +29,7 @@ index a5f728e..d8bae31 100644
                  "Percentage of context window used (omitted when unknown)"
              }
 +            StatusLineItem::ContextUsedBar => {
-+                "Context usage as an eight-cell meter (omitted when unknown)"
++                "Context usage as an eight-cell meter (dimmed when unknown)"
 +            }
              StatusLineItem::FiveHourLimit => {
                  "Remaining usage on the primary usage limit (omitted when unavailable)"
@@ -82,7 +82,7 @@ index a5f728e..d8bae31 100644
      fn thread_usage_items_are_independently_selectable() {
          assert_eq!(
 diff --git a/codex-rs/tui/src/bottom_pane/status_line_style.rs b/codex-rs/tui/src/bottom_pane/status_line_style.rs
-index 4783f55..e003832 100644
+index 4783f55..6c79af7 100644
 --- a/codex-rs/tui/src/bottom_pane/status_line_style.rs
 +++ b/codex-rs/tui/src/bottom_pane/status_line_style.rs
 @@ -40,13 +40,17 @@ impl StatusLineAccent {
@@ -104,7 +104,7 @@ index 4783f55..e003832 100644
              StatusLineItem::CodexVersion | StatusLineItem::Hostname | StatusLineItem::SessionId => {
                  Self::Metadata
              }
-@@ -121,12 +125,65 @@ where
+@@ -121,12 +125,72 @@ where
          } else {
              style
          };
@@ -141,13 +141,20 @@ index 4783f55..e003832 100644
 +    let (percent, suffix) = rest
 +        .split_once(' ')
 +        .map_or((rest, ""), |(percent, suffix)| (percent, suffix));
-+    let used_percent = percent.strip_suffix('%')?.parse::<u8>().ok()?.min(100);
++    let used_percent = percent
++        .strip_suffix('%')
++        .and_then(|value| value.parse::<u8>().ok())
++        .map(|value| value.min(100));
++    if used_percent.is_none() && percent != "?" {
++        return None;
++    }
 +
 +    let used_style = if use_colors {
 +        match used_percent {
-+            0..=59 => Style::default().green(),
-+            60..=84 => Style::default().yellow(),
-+            _ => Style::default().red(),
++            Some(0..=59) => Style::default().green(),
++            Some(60..=84) => Style::default().yellow(),
++            Some(_) => Style::default().red(),
++            None => Style::default().dim(),
 +        }
 +    } else {
 +        Style::default().dim()
@@ -170,7 +177,7 @@ index 4783f55..e003832 100644
  fn soften_status_line_style(mut style: Style) -> Style {
      if let Some(fg) = style.fg {
          style.fg = Some(soften_status_line_color(fg));
-@@ -237,6 +294,37 @@ mod tests {
+@@ -237,6 +301,55 @@ mod tests {
          assert!(!line.spans[2].style.add_modifier.contains(Modifier::DIM));
      }
  
@@ -205,11 +212,68 @@ index 4783f55..e003832 100644
 +        assert!(line.spans[9].style.add_modifier.contains(Modifier::DIM));
 +    }
 +
++    #[test]
++    fn compact_usage_bar_keeps_unknown_context_visible() {
++        let line = status_line_from_segments_with_resolver(
++            [(StatusLineItem::ContextUsedBar, "ctx ░░░░░░░░ ?".to_string())],
++            /*use_theme_colors*/ true,
++            |_| None,
++        )
++        .expect("unknown context status line");
++
++        assert_eq!(line_text(&line), "ctx ████████ ?");
++        assert!(
++            line.spans
++                .iter()
++                .skip(1)
++                .all(|span| span.style.add_modifier.contains(Modifier::DIM))
++        );
++    }
++
      #[test]
      fn thread_usage_items_share_an_accent_and_dim_separator() {
          let line = status_line_from_segments_with_resolver(
+diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
+index 40eadfa..39191a2 100644
+--- a/codex-rs/tui/src/chatwidget.rs
++++ b/codex-rs/tui/src/chatwidget.rs
+@@ -578,6 +578,12 @@ pub(crate) struct ChatWidget {
+     pub(crate) remote_connection: Option<RemoteConnectionStatus>,
+     token_info: Option<TokenUsageInfo>,
+     token_usage_pending: bool,
++    /// Last confirmed context percentage for the custom status-line meter.
++    ///
++    /// Core clears `token_info` while the next turn's count is pending. Keeping only the
++    /// confirmed percentage lets the meter remain stable without changing the semantics of
++    /// built-in token status items.
++    status_line_last_context_used_percent: Option<i64>,
+     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
+     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
+     next_status_refresh_request_id: u64,
+@@ -1164,6 +1170,9 @@ impl ChatWidget {
+         self.bottom_pane
+             .set_context_window_pending(/*pending*/ false);
+         let percent = self.context_remaining_percent(&info);
++        if let Some(remaining) = percent {
++            self.status_line_last_context_used_percent = Some((100 - remaining).clamp(0, 100));
++        }
+         let used_tokens = self.context_used_tokens(&info, percent.is_some());
+         self.bottom_pane.set_context_window(percent, used_tokens);
+         self.token_info = Some(info);
+diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
+index a1079ac..0f61816 100644
+--- a/codex-rs/tui/src/chatwidget/constructor.rs
++++ b/codex-rs/tui/src/chatwidget/constructor.rs
+@@ -129,6 +129,7 @@ impl ChatWidget {
+             remote_connection: None,
+             token_info: None,
+             token_usage_pending: false,
++            status_line_last_context_used_percent: None,
+             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+             refreshing_status_outputs: Vec::new(),
+             next_status_refresh_request_id: 0,
 diff --git a/codex-rs/tui/src/chatwidget/status_surfaces.rs b/codex-rs/tui/src/chatwidget/status_surfaces.rs
-index e79c0d3..064adc7 100644
+index e79c0d3..d293177 100644
 --- a/codex-rs/tui/src/chatwidget/status_surfaces.rs
 +++ b/codex-rs/tui/src/chatwidget/status_surfaces.rs
 @@ -12,6 +12,7 @@ use crate::legacy_core::config::Config;
@@ -220,7 +284,7 @@ index e79c0d3..064adc7 100644
  use codex_app_server_protocol::AskForApproval;
  use codex_config::ConfigLayerSource;
  use codex_config::os_host_name;
-@@ -22,6 +23,48 @@ use codex_utils_sandbox_summary::summarize_permission_profile;
+@@ -22,6 +23,52 @@ use codex_utils_sandbox_summary::summarize_permission_profile;
  
  use super::status_state::TerminalTitleStatusKind;
  
@@ -266,10 +330,14 @@ index e79c0d3..064adc7 100644
 +    text
 +}
 +
++fn compact_unknown_usage_meter(label: &str) -> String {
++    format!("{label} {} ?", "░".repeat(COMPACT_USAGE_BAR_SEGMENTS))
++}
++
  /// Items shown in the terminal title when the user has not configured a
  /// custom selection. Intentionally minimal: activity indicator + project name.
  pub(super) const DEFAULT_TERMINAL_TITLE_ITEMS: [&str; 2] = ["activity", "project-name"];
-@@ -562,6 +605,22 @@ impl ChatWidget {
+@@ -562,6 +609,22 @@ impl ChatWidget {
          let tx = self.app_event_tx.clone();
          tokio::spawn(async move {
              let branch = branch_summary::current_branch_name(runner.as_ref(), &cwd).await;
@@ -292,7 +360,7 @@ index e79c0d3..064adc7 100644
              tx.send(AppEvent::StatusLineBranchUpdated { cwd, branch });
          });
      }
-@@ -615,14 +674,22 @@ impl ChatWidget {
+@@ -615,14 +678,22 @@ impl ChatWidget {
  
      pub(super) fn refresh_status_line_if_workspace_headline_due(&mut self) {
          let now = Instant::now();
@@ -321,17 +389,20 @@ index e79c0d3..064adc7 100644
      }
  
      pub(crate) fn set_status_line_workspace_headline(
-@@ -714,6 +781,9 @@ impl ChatWidget {
+@@ -714,6 +785,12 @@ impl ChatWidget {
              StatusLineItem::ContextUsed => self
                  .status_line_context_used_percent()
                  .map(|used| format!("Context {used}% used")),
-+            StatusLineItem::ContextUsedBar => self
-+                .status_line_context_used_percent()
-+                .map(|used| compact_usage_meter("ctx", used as f64, None, Local::now())),
++            StatusLineItem::ContextUsedBar => Some(
++                self.status_line_context_used_percent()
++                    .or(self.status_line_last_context_used_percent)
++                    .map(|used| compact_usage_meter("ctx", used as f64, None, Local::now()))
++                    .unwrap_or_else(|| compact_unknown_usage_meter("ctx")),
++            ),
              StatusLineItem::FiveHourLimit => {
                  let (window, is_secondary) = self
                      .rate_limit_snapshots_by_limit_id
-@@ -722,6 +792,18 @@ impl ChatWidget {
+@@ -722,6 +799,18 @@ impl ChatWidget {
                  let label = limit_label_for_window(window.window_minutes, is_secondary);
                  self.status_line_limit_display(Some(window), &label)
              }
@@ -350,7 +421,7 @@ index e79c0d3..064adc7 100644
              StatusLineItem::WeeklyLimit => {
                  let (window, is_secondary) = self
                      .rate_limit_snapshots_by_limit_id
-@@ -730,6 +812,18 @@ impl ChatWidget {
+@@ -730,6 +819,18 @@ impl ChatWidget {
                  let label = limit_label_for_window(window.window_minutes, is_secondary);
                  self.status_line_limit_display(Some(window), &label)
              }
@@ -369,7 +440,7 @@ index e79c0d3..064adc7 100644
              StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
              StatusLineItem::ContextWindowSize => self
                  .status_line_context_window_size()
-@@ -1198,3 +1292,61 @@ where
+@@ -1198,3 +1299,66 @@ where
      }
      (items, invalid)
  }
@@ -403,6 +474,11 @@ index e79c0d3..064adc7 100644
 +    }
 +
 +    #[test]
++    fn renders_unknown_context_as_a_stable_meter() {
++        assert_eq!(compact_unknown_usage_meter("ctx"), "ctx ░░░░░░░░ ?");
++    }
++
++    #[test]
 +    fn renders_hour_and_day_reset_countdowns() {
 +        let now = local_time(1_800_000_000);
 +
@@ -431,6 +507,58 @@ index e79c0d3..064adc7 100644
 +        );
 +    }
 +}
+diff --git a/codex-rs/tui/src/chatwidget/tests/status_and_layout.rs b/codex-rs/tui/src/chatwidget/tests/status_and_layout.rs
+index 762e701..a4e7078 100644
+--- a/codex-rs/tui/src/chatwidget/tests/status_and_layout.rs
++++ b/codex-rs/tui/src/chatwidget/tests/status_and_layout.rs
+@@ -2916,6 +2916,47 @@ async fn status_line_context_used_renders_labeled_percent() {
+     );
+ }
+ 
++#[tokio::test]
++async fn status_line_context_bar_keeps_last_confirmed_value_while_pending() {
++    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
++    chat.thread_id = Some(ThreadId::new());
++    chat.config.tui_status_line = Some(vec!["context-used-bar".to_string()]);
++
++    handle_token_count(
++        &mut chat,
++        Some(make_token_info(
++            /*total_tokens*/ 12_700, /*context_window*/ 13_000,
++        )),
++    );
++    chat.refresh_status_line();
++    assert_eq!(
++        status_line_text(&chat),
++        Some("ctx ████████ 70%".to_string())
++    );
++
++    handle_token_count(&mut chat, None);
++    chat.refresh_status_line();
++    assert_eq!(
++        status_line_text(&chat),
++        Some("ctx ████████ 70%".to_string())
++    );
++}
++
++#[tokio::test]
++async fn status_line_context_bar_stays_visible_before_first_count() {
++    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
++    chat.thread_id = Some(ThreadId::new());
++    chat.config.tui_status_line = Some(vec!["context-used-bar".to_string()]);
++
++    handle_token_count(&mut chat, None);
++    chat.refresh_status_line();
++
++    assert_eq!(
++        status_line_text(&chat),
++        Some("ctx ████████ ?".to_string())
++    );
++}
++
+ #[tokio::test]
+ async fn status_line_context_remaining_renders_labeled_percent() {
+     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 diff --git a/codex-rs/tui/src/status/rate_limits.rs b/codex-rs/tui/src/status/rate_limits.rs
 index aaf54df..de79041 100644
 --- a/codex-rs/tui/src/status/rate_limits.rs
